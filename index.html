@@ -478,11 +478,11 @@ function fmtRange(a, b) {
   if (sameY) return `${fmtShort(a)} – ${fmtShort(b)} ${da.getFullYear()}`;
   return `${fmtShort(a)} ${da.getFullYear()} – ${fmtShort(b)} ${db.getFullYear()}`;
 }
-function nights(a, b) { return Math.max(1, Math.round((parseDate(b) - parseDate(a)) / 864e5)); }
+function nights(a, b) { return Math.max(0, Math.round((parseDate(b) - parseDate(a)) / 864e5)); }
 function isOngoing(t) { const now = todayStr(); return t.start && t.end && t.start <= now && now <= t.end; }
 function isUpcoming(t) { return t.start && t.start > todayStr(); }
 function uid(prefix) { return prefix + '_' + Math.random().toString(36).slice(2, 10); }
-function photoSrc(id) { return PHOTOS[id] || id; }
+function photoSrc(id) { return PHOTOS[id] || ''; }
 
 /* ================= Storage ================= */
 
@@ -653,7 +653,21 @@ function exportBackup() {
 async function importBackup(file) {
   const text = await file.text();
   const data = JSON.parse(text);
+  // Validate the whole payload BEFORE touching DIARY/PHOTOS/IndexedDB —
+  // a bad file must leave the existing diary untouched.
+  if (!data || typeof data !== 'object') throw new Error('not a Wanderly backup (not a JSON object)');
   if (!Array.isArray(data.trips)) throw new Error('not a Wanderly backup (no trips array)');
+  for (const t of data.trips) {
+    if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('not a Wanderly backup (trip is not an object)');
+    if (typeof t.id !== 'string' || !t.id) throw new Error('not a Wanderly backup (trip missing id)');
+    if (!Array.isArray(t.memories)) throw new Error(`not a Wanderly backup (trip "${t.title || t.id}" has no memories array)`);
+    for (const m of t.memories) {
+      if (!m || typeof m !== 'object' || Array.isArray(m)) throw new Error('not a Wanderly backup (memory is not an object)');
+      if (!Array.isArray(m.photos)) throw new Error('not a Wanderly backup (memory missing photos array)');
+    }
+  }
+  if (data.photos != null && (typeof data.photos !== 'object' || Array.isArray(data.photos)))
+    throw new Error('not a Wanderly backup (photos is not an object)');
   if (!confirm(`Replace everything with this backup?\n${data.trips.length} trips, exported ${data.exported ? data.exported.slice(0, 10) : 'unknown'}.`)) return;
   DIARY = { trips: data.trips };
   PHOTOS = data.photos || {};
@@ -679,12 +693,13 @@ function renderAll() {
 function tripCard(t) {
   const photos = t.memories.flatMap(m => m.photos);
   const cover = t.cover || photos[0];
+  const coverSrc = cover ? photoSrc(cover) : '';
   const strip = photos.slice(0, 5);
   const extra = photos.length - strip.length;
   return `
   <div class="trip-card" data-trip="${t.id}">
-    <div class="trip-cover" style="${cover ? '' : `background:linear-gradient(150deg, ${esc(t.color)}, #0a0a12)`}">
-      ${cover ? `<img src="${esc(photoSrc(cover))}" alt="">` : `<div class="cover-fallback"><span class="fb-emoji">${esc(t.emoji)}</span></div>`}
+    <div class="trip-cover" style="${coverSrc ? '' : `background:linear-gradient(150deg, ${esc(t.color)}, #0a0a12)`}">
+      ${coverSrc ? `<img src="${esc(coverSrc)}" alt="">` : `<div class="cover-fallback"><span class="fb-emoji">${esc(t.emoji)}</span></div>`}
       <div class="cover-shade"></div>
       <span class="trip-emoji">${esc(t.emoji)}</span>
       ${isOngoing(t) ? '<span class="ongoing-pill">ON TRIP NOW</span>' : ''}
@@ -700,7 +715,7 @@ function tripCard(t) {
       <span><b>${photos.length}</b> photos</span>
     </div>
     ${strip.length ? `<div class="trip-strip">
-      ${strip.map(p => `<img src="${esc(photoSrc(p))}" alt="">`).join('')}
+      ${strip.map(p => { const src = photoSrc(p); return src ? `<img src="${esc(src)}" alt="">` : ''; }).join('')}
       ${extra > 0 ? `<div class="strip-more">+${extra}</div>` : ''}
     </div>` : ''}
   </div>`;
@@ -760,7 +775,7 @@ function memCard(t, m) {
       ${m.place ? `<span class="mem-place">📍 ${esc(m.place)}</span>` : ''}
       ${m.note ? `<div class="mem-note">${esc(m.note)}</div>` : ''}
       ${m.photos.length ? `<div class="mem-photos">
-        ${m.photos.map(p => `<img src="${esc(photoSrc(p))}" class="${m.photos.length === 1 ? 'wide' : ''}" data-lb="${esc(p)}" data-cap="${esc(m.title)} — ${fmtLong(m.date)}" alt="">`).join('')}
+        ${m.photos.map(p => { const src = photoSrc(p); return src ? `<img src="${esc(src)}" class="${m.photos.length === 1 ? 'wide' : ''}" data-lb="${esc(p)}" data-cap="${esc(m.title)} — ${fmtLong(m.date)}" alt="">` : ''; }).join('')}
       </div>` : ''}
     </div>
   </div>`;
@@ -769,6 +784,7 @@ function memCard(t, m) {
 function renderTripSheet(t) {
   const photos = t.memories.flatMap(m => m.photos);
   const cover = t.cover || photos[0];
+  const coverSrc = cover ? photoSrc(cover) : '';
   const byDate = {};
   for (const m of t.memories) (byDate[m.date] ||= []).push(m);
   const dates = Object.keys(byDate).sort();
@@ -786,8 +802,8 @@ function renderTripSheet(t) {
   }).join('');
 
   $('#trip-sheet-body').innerHTML = `
-    <div class="sheet-hero" style="${cover ? '' : `background:linear-gradient(150deg, ${esc(t.color)}, #0a0a12)`}">
-      ${cover ? `<img src="${esc(photoSrc(cover))}" alt="">` : `<div class="cover-fallback"><span class="fb-emoji">${esc(t.emoji)}</span></div>`}
+    <div class="sheet-hero" style="${coverSrc ? '' : `background:linear-gradient(150deg, ${esc(t.color)}, #0a0a12)`}">
+      ${coverSrc ? `<img src="${esc(coverSrc)}" alt="">` : `<div class="cover-fallback"><span class="fb-emoji">${esc(t.emoji)}</span></div>`}
       <div class="cover-shade"></div>
       <button class="sheet-back" id="sheet-back">‹ Trips</button>
       <button class="sheet-del" id="sheet-del">Delete trip</button>
@@ -868,6 +884,7 @@ function renderTimeline() {
       lastMonth = monthKey;
     }
     const thumb = m.photos[0];
+    const thumbSrc = thumb ? photoSrc(thumb) : '';
     html += `
     <div class="tl-row">
       <div class="tl-rail">
@@ -875,7 +892,7 @@ function renderTimeline() {
         <div class="mem-line"></div>
       </div>
       <div class="tl-card" data-trip="${t.id}">
-        ${thumb ? `<img class="tl-thumb" src="${esc(photoSrc(thumb))}" alt="">` : `<div class="tl-thumb-ph">${esc(m.mood || t.emoji)}</div>`}
+        ${thumbSrc ? `<img class="tl-thumb" src="${esc(thumbSrc)}" alt="">` : `<div class="tl-thumb-ph">${esc(m.mood || t.emoji)}</div>`}
         <div class="tl-info">
           <div class="tl-date">${fmtLong(m.date)}${m.time ? ' · ' + esc(m.time) : ''}</div>
           <div class="tl-title">${esc(m.title)}</div>
@@ -1089,6 +1106,7 @@ function showMemoryModal(tripId) {
   $('#f-save').addEventListener('click', async () => {
     const title = $('#f-title').value.trim();
     if (!title) { $('#f-title').focus(); return; }
+    if (!$('#f-date').value) { alert('A memory needs a date — pick one before saving.'); $('#f-date').focus(); return; }
     const btn = $('#f-save');
     btn.disabled = true;
     btn.textContent = 'Saving…';
@@ -1130,13 +1148,18 @@ document.querySelectorAll('.tabbtn').forEach(b => b.addEventListener('click', ()
 }));
 
 $('#fab').addEventListener('click', () => {
+  if (fabLongPressed) { fabLongPressed = false; return; } // long-press already opened the trip modal
   if (openTripId) showMemoryModal(openTripId);
   else if (DIARY.trips.length) showMemoryModal(null);
   else showTripModal();
 });
 $('#fab').addEventListener('contextmenu', e => { e.preventDefault(); showTripModal(); });
 let fabTimer = null;
-$('#fab').addEventListener('pointerdown', () => { fabTimer = setTimeout(showTripModal, 550); });
+let fabLongPressed = false;
+$('#fab').addEventListener('pointerdown', () => {
+  fabLongPressed = false;
+  fabTimer = setTimeout(() => { fabLongPressed = true; showTripModal(); }, 550);
+});
 $('#fab').addEventListener('pointerup', () => clearTimeout(fabTimer));
 $('#fab').addEventListener('pointerleave', () => clearTimeout(fabTimer));
 
